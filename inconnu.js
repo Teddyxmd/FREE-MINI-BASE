@@ -44,12 +44,10 @@ const prefix = config.PREFIX;
 const mode = config.MODE || config.WORK_TYPE;
 const router = express.Router();
 
-
 connectdb();
 
 const activeSockets = new Map();
 const socketCreationTime = new Map();
-
 
 function createInconnuboyStore() {
     const store = {
@@ -73,7 +71,6 @@ function createInconnuboyStore() {
     return store;
 }
 
-// Utility functions
 const createSerial = (size) => crypto.randomBytes(size).toString('hex').slice(0, size);
 
 const getGroupAdmins = (participants) => {
@@ -95,8 +92,8 @@ function getConnectionStatus(number) {
     const connectionTime = socketCreationTime.get(n);
     return {
         isConnected,
-        connectionTime: connectionTime ? new Date(connectionTime).toLocaleString() : null,
-        uptime: connectionTime ? Math.floor((Date.now() - connectionTime) / 1000) : 0
+        connectionTime: connectionTime? new Date(connectionTime).toLocaleString() : null,
+        uptime: connectionTime? Math.floor((Date.now() - connectionTime) / 1000) : 0
     };
 }
 
@@ -105,7 +102,6 @@ function inconnuboyLog(message, type = 'info') {
     console.log(`${icons[type] || '📝'} [INCONNU-BOY] ${new Date().toISOString()}: ${message}`);
 }
 
-// Load Plugins
 const pluginsDir = path.join(__dirname, 'plugins');
 if (!fs.existsSync(pluginsDir)) fs.mkdirSync(pluginsDir, { recursive: true });
 const pluginFiles = fs.readdirSync(pluginsDir).filter(f => f.endsWith('.js'));
@@ -115,18 +111,15 @@ for (const file of pluginFiles) {
     catch (e) { inconnuboyLog(`Failed to load plugin ${file}: ${e.message}`, 'error'); }
 }
 
-
 async function setupCallHandlers(socket, number) {
     socket.ev.on('call', async (calls) => {
         try {
             const userConfig = await getUserConfigFromMongoDB(number);
-            if (userConfig.ANTI_CALL !== 'true') return;
+            if (userConfig.ANTI_CALL!== 'true') return;
             for (const call of calls) {
-                if (call.status !== 'offer') continue;
+                if (call.status!== 'offer') continue;
                 await socket.rejectCall(call.id, call.from);
-                await socket.sendMessage(call.from, {
-                    text: userConfig.REJECT_MSG || config.REJECT_MSG
-                });
+                await socket.sendMessage(call.from, { text: userConfig.REJECT_MSG || config.REJECT_MSG });
                 inconnuboyLog(`Auto-rejected call for ${number} from ${call.from}`, 'info');
             }
         } catch (err) {
@@ -142,12 +135,12 @@ function setupAutoRestart(socket, number) {
     socket.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect } = update;
         if (connection === 'close') {
-            const statusCode = lastDisconnect && lastDisconnect.error && lastDisconnect.error.output && lastDisconnect.error.output.statusCode;
-            const errorMessage = lastDisconnect && lastDisconnect.error && lastDisconnect.error.message;
+            const statusCode = lastDisconnect?.error?.output?.statusCode;
+            const errorMessage = lastDisconnect?.error?.message;
             inconnuboyLog(`Connection closed for ${number}: ${statusCode} - ${errorMessage}`, 'warning');
 
-            if (statusCode === 401 || (errorMessage && errorMessage.includes('401'))) {
-                inconnuboyLog(`Manual unlink detected for ${number}, cleaning up...`, 'warning');
+            if (statusCode === 401 || errorMessage?.includes('401')) {
+                inconnuboyLog(`Manual unlink detected for ${number}`, 'warning');
                 const sanitizedNumber = number.replace(/[^0-9]/g, '');
                 activeSockets.delete(sanitizedNumber);
                 socketCreationTime.delete(sanitizedNumber);
@@ -157,8 +150,8 @@ function setupAutoRestart(socket, number) {
                 return;
             }
 
-            const isNormalError = statusCode === 408 || (errorMessage && errorMessage.includes('QR refs attempts ended'));
-            if (isNormalError) { inconnuboyLog(`Normal closure for ${number}, no restart needed.`, 'info'); return; }
+            const isNormalError = statusCode === 408 || errorMessage?.includes('QR refs attempts ended');
+            if (isNormalError) { inconnuboyLog(`Normal closure for ${number}`, 'info'); return; }
 
             if (restartAttempts < maxRestartAttempts) {
                 restartAttempts++;
@@ -172,14 +165,11 @@ function setupAutoRestart(socket, number) {
                     const mockRes = { headersSent: false, send: () => {}, status: () => mockRes, setHeader: () => {}, json: () => {} };
                     await inconnuboyPair(number, mockRes);
                 } catch (e) { inconnuboyLog(`Reconnection failed for ${number}: ${e.message}`, 'error'); }
-            } else {
-                inconnuboyLog(`Max restart attempts reached for ${number}.`, 'error');
             }
         }
         if (connection === 'open') { restartAttempts = 0; }
     });
 }
-
 
 async function inconnuboyPair(number, res = null) {
     let connectionLockKey;
@@ -190,7 +180,7 @@ async function inconnuboyPair(number, res = null) {
 
         if (isNumberAlreadyConnected(sanitizedNumber)) {
             const status = getConnectionStatus(sanitizedNumber);
-            if (res && !res.headersSent) {
+            if (res &&!res.headersSent) {
                 return res.json({ status: 'already_connected', message: 'Number is already connected', connectionTime: status.connectionTime, uptime: `${status.uptime} seconds` });
             }
             return;
@@ -198,37 +188,28 @@ async function inconnuboyPair(number, res = null) {
 
         connectionLockKey = `inconnuboy_lock_${sanitizedNumber}`;
         if (global[connectionLockKey]) {
-            if (res && !res.headersSent) return res.json({ status: 'connection_in_progress' });
+            if (res &&!res.headersSent) return res.json({ status: 'connection_in_progress' });
             return;
         }
         global[connectionLockKey] = true;
 
-        // Check MongoDB session
         const existingSession = await getSessionFromMongoDB(sanitizedNumber);
 
         if (!existingSession) {
             inconnuboyLog(`No MongoDB session for ${sanitizedNumber} — new pairing required`, 'info');
-            if (fs.existsSync(sessionPath)) {
-                await fs.remove(sessionPath);
-                inconnuboyLog(`Cleaned leftover local session for ${sanitizedNumber}`, 'info');
-            }
+            if (fs.existsSync(sessionPath)) await fs.remove(sessionPath);
         } else {
-            // Session exists - restore from MongoDB
             fs.ensureDirSync(sessionPath);
             fs.writeFileSync(path.join(sessionPath, 'creds.json'), JSON.stringify(existingSession, null, 2));
             inconnuboyLog(`🔄 Restored existing session from MongoDB for ${sanitizedNumber}`, 'success');
         }
 
         const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
-        const logger = pino({ level: process.env.NODE_ENV === 'production' ? 'fatal' : 'debug' });
-
+        const logger = pino({ level: process.env.NODE_ENV === 'production'? 'fatal' : 'debug' });
         const inconnuboyStore = createInconnuboyStore();
 
         const conn = makeWASocket({
-            auth: {
-                creds: state.creds,
-                keys: makeCacheableSignalKeyStore(state.keys, logger),
-            },
+            auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, logger) },
             printQRInTerminal: false,
             logger: pino({ level: "silent" }),
             version: [2, 3000, 1033105955],
@@ -240,10 +221,10 @@ async function inconnuboyPair(number, res = null) {
             generateHighQualityLinkPreview: true,
             syncFullHistory: true,
             markOnlineOnConnect: true,
-            browser: ['Mac OS', 'Safari', '10.15.7'],
+            browser: Browsers.macOS('Safari'), // FIX 1: Use Browsers helper for 6.7.17
             getMessage: async (key) => {
                 const msg = await inconnuboyStore.loadMessage(key.remoteJid, key.id);
-                return msg && msg.message ? msg.message : { conversation: 'INCONNU BOY' };
+                return msg?.message || { conversation: 'INCONNU BOY' };
             }
         });
 
@@ -251,11 +232,9 @@ async function inconnuboyPair(number, res = null) {
         activeSockets.set(sanitizedNumber, conn);
         inconnuboyStore.bind(conn.ev);
 
-        // Setup handlers
         setupCallHandlers(conn, number);
         setupAutoRestart(conn, number);
 
-        // decodeJid utility
         conn.decodeJid = jid => {
             if (!jid) return jid;
             if (/:\d+@/gi.test(jid)) {
@@ -266,61 +245,49 @@ async function inconnuboyPair(number, res = null) {
         };
 
         conn.downloadAndSaveMediaMessage = async (message, filename, attachExtension = true) => {
-            const quoted = message.msg ? message.msg : message;
+            const quoted = message.msg? message.msg : message;
             const mime = (message.msg || message).mimetype || '';
-            const messageType = message.mtype ? message.mtype.replace(/Message/gi, '') : mime.split('/')[0];
+            const messageType = message.mtype? message.mtype.replace(/Message/gi, '') : mime.split('/')[0];
             const stream = await downloadContentFromMessage(quoted, messageType);
             let buffer = Buffer.from([]);
             for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
             const type = await FileType.fromBuffer(buffer);
-            const trueFileName = attachExtension ? (filename + '.' + type.ext) : filename;
+            const trueFileName = attachExtension? (filename + '.' + type.ext) : filename;
             await fs.writeFileSync(trueFileName, buffer);
             return trueFileName;
         };
 
-        // Pairing Code
         if (!conn.authState.creds.registered) {
             inconnuboyLog(`🔐 Starting NEW pairing process for ${sanitizedNumber}`, 'info');
             try {
                 await delay(1500);
                 const code = await conn.requestPairingCode(sanitizedNumber);
                 inconnuboyLog(`Pairing Code for ${sanitizedNumber}: ${code}`, 'success');
-                if (res && !res.headersSent) {
-                    res.send({ code, status: 'new_pairing' });
-                }
+                if (res &&!res.headersSent) res.send({ code, status: 'new_pairing' });
             } catch (error) {
                 inconnuboyLog(`Failed to request pairing code: ${error.message}`, 'error');
-                if (res && !res.headersSent) {
-                    res.status(500).send({ error: 'Failed to get pairing code', status: 'error', message: error.message });
-                }
+                if (res &&!res.headersSent) res.status(500).send({ error: 'Failed to get pairing code', status: 'error', message: error.message });
                 throw error;
             }
         } else {
             inconnuboyLog(`✅ Using existing session for ${sanitizedNumber}`, 'success');
-            if (res && !res.headersSent) {
-                res.json({ status: 'reconnecting', message: 'Reconnecting with existing session' });
-            }
+            if (res &&!res.headersSent) res.json({ status: 'reconnecting', message: 'Reconnecting with existing session' });
         }
 
-        // Save creds on update
         conn.ev.on('creds.update', async () => {
             await saveCreds();
             const fileContent = await fs.readFile(path.join(sessionPath, 'creds.json'), 'utf8');
             const creds = JSON.parse(fileContent);
             const existingSessionCheck = await getSessionFromMongoDB(sanitizedNumber);
-            const isNewSession = !existingSessionCheck;
+            const isNewSession =!existingSessionCheck;
             await saveSessionToMongoDB(sanitizedNumber, creds);
-            if (isNewSession) {
-                inconnuboyLog(`🎉 NEW user ${sanitizedNumber} successfully registered!`, 'success');
-            }
+            if (isNewSession) inconnuboyLog(`🎉 NEW user ${sanitizedNumber} successfully registered!`, 'success');
         });
 
-        // Anti-delete
         conn.ev.on('messages.update', async (updates) => {
             await handleAntidelete(conn, updates, inconnuboyStore);
         });
 
-        // Connection update
         conn.ev.on('connection.update', async (update) => {
             const { connection, lastDisconnect } = update;
             if (connection === 'open') {
@@ -330,16 +297,15 @@ async function inconnuboyPair(number, res = null) {
                 if (!existingSession) {
                     await conn.sendMessage(userJid, {
                         image: { url: config.IMAGE_PATH },
-                        caption: `\n╭────────────────────◇\n│✦ *INCONNU BOY — CONNECTED* 🔥\n│✦ Type *${prefix}menu* to see all commands 💫\n│✦ Prefix 『 ${prefix} 』  Mode 〔${mode}〕\n╰────────────────────○\n*© Powered by INCONNU BOY*`
+                        caption: `\n╭────────────────────◇\n│✦ *INCONNU BOY — CONNECTED* 🔥\n│✦ Type *${prefix}menu* to see all commands 💫\n│✦ Prefix 『 ${prefix} 』 Mode 〔${mode}〕\n╰────────────────────○\n*© Powered by INCONNU BOY*`
                     });
                 }
             }
             if (connection === 'close') {
-                const reason = lastDisconnect && lastDisconnect.error && lastDisconnect.error.output && lastDisconnect.error.output.statusCode;
+                const reason = lastDisconnect?.error?.output?.statusCode;
                 if (reason === DisconnectReason.loggedOut) inconnuboyLog(`Session logged out.`, 'error');
             }
         });
-
 
         conn.ev.on('messages.upsert', async (msg) => {
             try {
@@ -347,14 +313,9 @@ async function inconnuboyPair(number, res = null) {
                 if (!mek.message) return;
 
                 const userConfig = await getUserConfigFromMongoDB(number);
-
-                mek.message = (getContentType(mek.message) === 'ephemeralMessage')
-                    ? mek.message.ephemeralMessage.message
-                    : mek.message;
-
+                mek.message = (getContentType(mek.message) === 'ephemeralMessage')? mek.message.ephemeralMessage.message : mek.message;
                 if (userConfig.READ_MESSAGE === 'true') await conn.readMessages([mek.key]);
 
-                // Newsletter reactions
                 const newsletterJids = ['120363403408693274@newsletter'];
                 const newsEmojis = ['❤️', '👍', '😮', '😎', '💀', '💫', '🔥', '👑'];
                 if (mek.key && newsletterJids.includes(mek.key.remoteJid)) {
@@ -367,7 +328,6 @@ async function inconnuboyPair(number, res = null) {
                     } catch (_) {}
                 }
 
-                // Status handling
                 if (mek.key && mek.key.remoteJid === 'status@broadcast') {
                     if (userConfig.AUTO_VIEW_STATUS === 'true') await conn.readMessages([mek.key]);
                     if (userConfig.AUTO_LIKE_STATUS === 'true') {
@@ -386,19 +346,15 @@ async function inconnuboyPair(number, res = null) {
                 const m = sms(conn, mek);
                 const type = getContentType(mek.message);
                 const from = mek.key.remoteJid;
-                const body = (type === 'conversation') ? mek.message.conversation
-                    : (type === 'extendedTextMessage') ? mek.message.extendedTextMessage.text : '';
-
+                const body = (type === 'conversation')? mek.message.conversation : (type === 'extendedTextMessage')? mek.message.extendedTextMessage.text : '';
                 const isCmd = body.startsWith(config.PREFIX);
-                const command = isCmd ? body.slice(config.PREFIX.length).trim().split(' ').shift().toLowerCase() : '';
+                const command = isCmd? body.slice(config.PREFIX.length).trim().split(' ').shift().toLowerCase() : '';
                 const args = body.trim().split(/ +/).slice(1);
                 const q = args.join(' ');
                 const text = q;
                 const isGroup = from.endsWith('@g.us');
 
-                const sender = mek.key.fromMe
-                    ? (conn.user.id.split(':')[0] + '@s.whatsapp.net')
-                    : (mek.key.participant || mek.key.remoteJid);
+                const sender = mek.key.fromMe? (conn.user.id.split(':')[0] + '@s.whatsapp.net') : (mek.key.participant || mek.key.remoteJid);
                 const senderNumber = sender.split('@')[0];
                 const botNumber = conn.user.id.split(':')[0];
                 const botNumber2 = await jidNormalizedUser(conn.user.id);
@@ -427,11 +383,7 @@ async function inconnuboyPair(number, res = null) {
 
                 const myquoted = {
                     key: { remoteJid: 'status@broadcast', participant: '13135550002@s.whatsapp.net', fromMe: false, id: createSerial(16).toUpperCase() },
-                    message: { contactMessage: {
-                        displayName: '© INCONNU BOY',
-                        vcard: `BEGIN:VCARD\nVERSION:3.0\nFN:INCONNU BOY\nORG:INCONNU BOY;\nTEL;type=CELL;type=VOICE;waid=13135550002:13135550002\nEND:VCARD`,
-                        contextInfo: { stanzaId: createSerial(16).toUpperCase(), participant: '0@s.whatsapp.net', quotedMessage: { conversation: '© INCONNU BOY' } }
-                    }},
+                    message: { contactMessage: { displayName: '© INCONNU BOY', vcard: `BEGIN:VCARD\nVERSION:3.0\nFN:INCONNU BOY\nORG:INCONNU BOY;\nTEL;type=CELL;type=VOICE;waid=13135550002:13135550002\nEND:VCARD`, contextInfo: { stanzaId: createSerial(16).toUpperCase(), participant: '0@s.whatsapp.net', quotedMessage: { conversation: '© INCONNU BOY' }}},
                     messageTimestamp: Math.floor(Date.now() / 1000),
                     status: 1, verifiedBizName: 'Meta'
                 };
@@ -443,11 +395,10 @@ async function inconnuboyPair(number, res = null) {
                     await incrementStats(sanitizedNumber, 'commandsUsed');
                     const cmd = events.commands.find(c => c.pattern === command) || events.commands.find(c => c.alias && c.alias.includes(command));
                     if (cmd) {
-                        if (config.WORK_TYPE === 'private' && !isOwner) return;
+                        if (config.WORK_TYPE === 'private' &&!isOwner) return;
                         if (cmd.react) conn.sendMessage(from, { react: { text: cmd.react, key: mek.key } });
-                        try {
-                            cmd.function(conn, mek, m, { from, quoted: mek, body, isCmd, command, args, q, text, isGroup, sender, senderNumber, botNumber2, botNumber, pushname, isMe, isOwner, isCreator, groupMetadata, groupName, participants, groupAdmins, isBotAdmins, isAdmins, reply, config, myquoted });
-                        } catch (e) { inconnuboyLog(`PLUGIN ERROR [${command}]: ${e.message}`, 'error'); }
+                        try { cmd.function(conn, mek, m, { from, quoted: mek, body, isCmd, command, args, q, text, isGroup, sender, senderNumber, botNumber2, botNumber, pushname, isMe, isOwner, isCreator, groupMetadata, groupName, participants, groupAdmins, isBotAdmins, isAdmins, reply, config, myquoted }); }
+                        catch (e) { inconnuboyLog(`PLUGIN ERROR [${command}]: ${e.message}`, 'error'); }
                     }
                 }
 
@@ -467,12 +418,11 @@ async function inconnuboyPair(number, res = null) {
 
     } catch (err) {
         inconnuboyLog(`inconnuboyPair error: ${err.message}`, 'error');
-        if (res && !res.headersSent) return res.json({ error: 'Internal Server Error', details: err.message });
+        if (res &&!res.headersSent) return res.json({ error: 'Internal Server Error', details: err.message });
     } finally {
         if (connectionLockKey) global[connectionLockKey] = false;
     }
 }
-
 
 router.get('/', (req, res) => res.sendFile(path.join(__dirname, 'pair.html')));
 router.get('/code', async (req, res) => { if (!req.query.number) return res.json({ error: 'Number required' }); await inconnuboyPair(req.query.number, res); });
@@ -517,7 +467,7 @@ router.get('/connect-all', async (req, res) => {
 });
 router.get('/update-config', async (req, res) => {
     const { number, config: configString } = req.query;
-    if (!number || !configString) return res.status(400).json({ error: 'Number and config required' });
+    if (!number ||!configString) return res.status(400).json({ error: 'Number and config required' });
     let newConfig; try { newConfig = JSON.parse(configString); } catch (_) { return res.status(400).json({ error: 'Invalid config' }); }
     const n = number.replace(/[^0-9]/g, '');
     const socket = activeSockets.get(n);
@@ -531,7 +481,7 @@ router.get('/update-config', async (req, res) => {
 });
 router.get('/verify-otp', async (req, res) => {
     const { number, otp } = req.query;
-    if (!number || !otp) return res.status(400).json({ error: 'Number and OTP required' });
+    if (!number ||!otp) return res.status(400).json({ error: 'Number and OTP required' });
     const n = number.replace(/[^0-9]/g, '');
     const verification = await verifyOTPFromMongoDB(n, otp);
     if (!verification.valid) return res.status(400).json({ error: verification.error });
@@ -547,11 +497,9 @@ router.get('/stats', async (req, res) => {
         const stats = await getStatsForNumber(number);
         const n = number.replace(/[^0-9]/g, '');
         const s = getConnectionStatus(n);
-        res.json({ number: n, connectionStatus: s.isConnected ? 'Connected' : 'Disconnected', uptime: s.uptime, stats });
+        res.json({ number: n, connectionStatus: s.isConnected? 'Connected' : 'Disconnected', uptime: s.uptime, stats });
     } catch (e) { res.status(500).json({ error: 'Failed' }); }
 });
-
-
 
 async function autoReconnectFromMongoDB() {
     try {
@@ -570,8 +518,6 @@ async function autoReconnectFromMongoDB() {
 }
 
 setTimeout(() => { autoReconnectFromMongoDB(); }, 3000);
-
-
 
 process.on('exit', () => {
     activeSockets.forEach((socket, number) => {
